@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+    Lab Data Analytics.
+Parameters:
+  StudentLabDataBucket:
+    Type: String
+Globals:
+  Function:
+    Runtime: python3.6 # language used at runtime
+    Timeout: 180 # timeout for a given lambda function execution
+    MemorySize: 512
+Resources:
+  DatabaseLabMonitor:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub lab_monitor_${AWS::StackName}
+        Description: Lab Monitor Database
+
+  TableEvents:
+    # Creating the table waits for the database to be created
+    DependsOn: DatabaseLabMonitor
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DatabaseLabMonitor
+      TableInput:
+        Name: event_stream
+        Description: Event from students.
+        TableType: EXTERNAL_TABLE
+        Parameters: {
+          "classification": "json"
+        }
+        PartitionKeys:
+          - Name: year
+            Type: int
+          - Name: month
+            Type: int
+          - Name: day
+            Type: int
+          - Name: hour
+            Type: int
+          - Name: id
+            Type: string
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+            - Name: x
+              Type: int
+            - Name: y
+              Type: int
+            - Name: dx
+              Type: int
+            - Name: dy
+              Type: int
+            - Name: time
+              Type: timestamp
+            - Name: button
+              Type: string
+            - Name: pressed
+              Type: string
+            - Name: key
+              Type: string
+            - Name: name
+              Type: string
+            - Name: ip
+              Type: string
+            - Name: student
+              Type: string            
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: 
+            Fn::Sub: 's3://${StudentLabDataBucket}/event_stream'
+          SerdeInfo:
+            Parameters:
+              paths: 'button,dx,dy,ip,key,name,pressed,student,time,x,y'
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+
+  TableProcesses:
+    # Creating the table waits for the database to be created
+    DependsOn: DatabaseLabMonitor
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DatabaseLabMonitor
+      TableInput:
+        Name: process_stream
+        Description: process from students.
+        TableType: EXTERNAL_TABLE
+        Parameters: {
+          "classification": "json"
+        }
+        PartitionKeys:
+          - Name: year
+            Type: int
+          - Name: month
+            Type: int
+          - Name: day
+            Type: int
+          - Name: hour
+            Type: int
+          - Name: id
+            Type: string        
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+          - Name: name
+            Type: string
+          - Name: pid
+            Type: string
+          - Name: time
+            Type: string
+          - Name: is_killed
+            Type: boolean 
+          - Name: ip
+            Type: string
+          - Name: student
+            Type: string             
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: 
+            Fn::Sub: 's3://${StudentLabDataBucket}/process_stream'
+          SerdeInfo:
+            Parameters:
+              paths: 'ip,is_killed,name,pid,student,time'
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            
+  AthenaNamedQueryStudentKeyboardStream:
+    DependsOn: TableEvents
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Database: !Ref DatabaseLabMonitor
+      Description: !Sub ${AWS::StackName} Student Keyboard Stream
+      Name: !Sub ${AWS::StackName} Student Keyboard Stream
+      QueryString: !Sub >
+                    SELECT distinct(id), array_agg(key) 
+                    FROM "studentevents${AWS::StackName}"."event_stream" 
+                    WHERE name='KeyPressEvent' 
+                    GROUP BY id;
